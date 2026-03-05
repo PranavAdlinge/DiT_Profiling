@@ -1,3 +1,11 @@
+"""
+Generate smaller Flux2 transformer variants from a larger base checkpoint.
+
+This script changes depth-related config fields (`num_layers`, `num_single_layers`)
+to approximate requested target model sizes (for example 4B -> 2B / 1B), then
+saves variant checkpoints with compatible transformer weights.
+"""
+
 import argparse
 import copy
 import json
@@ -18,6 +26,9 @@ WEIGHT_CANDIDATES = (
 
 
 def parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments for base model loading and target variant generation.
+    """
     parser = argparse.ArgumentParser(
         description="Generate smaller Flux2 transformer variants (for example 4B -> 2B/1B) by reducing layer counts."
     )
@@ -72,15 +83,24 @@ def parse_args() -> argparse.Namespace:
 
 
 def count_params(module: torch.nn.Module) -> int:
+    """
+    Return total number of parameters for a module.
+    """
     return sum(p.numel() for p in module.parameters())
 
 
 def load_json(path: Path) -> dict:
+    """
+    Load JSON file from disk.
+    """
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def find_weight_file(path_or_dir: Path | None) -> Path | None:
+    """
+    Resolve weight file path from a direct path or candidate filenames in a directory.
+    """
     if path_or_dir is None:
         return None
     if path_or_dir.is_file():
@@ -93,6 +113,9 @@ def find_weight_file(path_or_dir: Path | None) -> Path | None:
 
 
 def load_state_dict(weights_path: Path) -> dict[str, torch.Tensor]:
+    """
+    Load checkpoint and normalize to a plain tensor state dict.
+    """
     if weights_path.suffix == ".safetensors":
         from safetensors.torch import load_file
 
@@ -109,12 +132,23 @@ def load_state_dict(weights_path: Path) -> dict[str, torch.Tensor]:
 
 
 def maybe_strip_prefix(state_dict: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
+    """
+    Strip a key prefix if all keys are namespaced under it.
+    """
     if all(k.startswith(prefix) for k in state_dict.keys()):
         return {k[len(prefix) :]: v for k, v in state_dict.items()}
     return state_dict
 
 
 def build_base_model(config_path: Path, weights_path: Path | None, allow_random_base: bool):
+    """
+    Build base model from config and optionally load base weights.
+
+    Returns:
+    - model
+    - config dict
+    - bool indicating whether external base weights were loaded
+    """
     config = load_json(config_path)
     model = Flux2Transformer2DModel.from_config(config)
 
@@ -142,6 +176,13 @@ def build_base_model(config_path: Path, weights_path: Path | None, allow_random_
 
 
 def pick_layer_counts_for_ratio(base_model: Flux2Transformer2DModel, target_ratio: float) -> tuple[int, int, int]:
+    """
+    Search over possible layer-count combinations and pick the best depth pair.
+
+    The selected combination minimizes:
+    - parameter-count distance to target ratio
+    - imbalance between double/single stream depth shrinkage ratios
+    """
     base_double = len(base_model.transformer_blocks)
     base_single = len(base_model.single_transformer_blocks)
     if base_double == 0 or base_single == 0:
@@ -168,12 +209,22 @@ def pick_layer_counts_for_ratio(base_model: Flux2Transformer2DModel, target_rati
 
 
 def format_size_tag(size_b: float) -> str:
+    """
+    Convert size float to folder-safe tag string (for example 2.0 -> '2b').
+    """
     if size_b.is_integer():
         return f"{int(size_b)}b"
     return f"{size_b:.2f}".rstrip("0").rstrip(".") + "b"
 
 
 def main() -> None:
+    """
+    End-to-end variant generation workflow:
+    1) Load base model/config
+    2) Pick target layer counts for each requested size
+    3) Build each variant and load compatible weights
+    4) Save variant checkpoint and manifest
+    """
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 

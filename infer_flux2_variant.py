@@ -1,3 +1,12 @@
+"""
+Load a Flux2 transformer checkpoint/variant and run a dummy forward pass.
+
+This script is mainly for validation:
+- checkpoint loads correctly
+- tensor shapes are consistent
+- model returns output without training dependencies
+"""
+
 import argparse
 import json
 from pathlib import Path
@@ -17,6 +26,9 @@ WEIGHT_CANDIDATES = (
 
 
 def parse_args() -> argparse.Namespace:
+    """
+    Parse CLI arguments for model path, input sizes, and runtime settings.
+    """
     parser = argparse.ArgumentParser(description="Run dummy inference on a Flux2 transformer checkpoint/variant.")
     parser.add_argument(
         "--transformer-dir",
@@ -46,11 +58,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_json(path: Path) -> dict:
+    """
+    Load JSON config from disk.
+    """
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def find_weight_file(path_or_dir: Path | None) -> Path | None:
+    """
+    Resolve weight file path from direct path or known filenames in directory.
+    """
     if path_or_dir is None:
         return None
     if path_or_dir.is_file():
@@ -63,6 +81,9 @@ def find_weight_file(path_or_dir: Path | None) -> Path | None:
 
 
 def load_state_dict(weights_path: Path) -> dict[str, torch.Tensor]:
+    """
+    Load checkpoint and normalize to a plain tensor state_dict.
+    """
     if weights_path.suffix == ".safetensors":
         from safetensors.torch import load_file
 
@@ -79,12 +100,18 @@ def load_state_dict(weights_path: Path) -> dict[str, torch.Tensor]:
 
 
 def maybe_strip_prefix(state_dict: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
+    """
+    Strip key prefix if all checkpoint keys are nested under that prefix.
+    """
     if all(k.startswith(prefix) for k in state_dict.keys()):
         return {k[len(prefix) :]: v for k, v in state_dict.items()}
     return state_dict
 
 
 def parse_dtype(dtype_str: str, device: str) -> torch.dtype:
+    """
+    Parse dtype text and apply CPU-safe fallback for fp16/bf16 -> fp32.
+    """
     mapping = {
         "float16": torch.float16,
         "fp16": torch.float16,
@@ -102,7 +129,10 @@ def parse_dtype(dtype_str: str, device: str) -> torch.dtype:
 
 
 def build_token_ids(seq_len: int, axes_count: int, device: str) -> torch.Tensor:
-    # Build deterministic token IDs across all RoPE axes.
+    """
+    Build deterministic token IDs across all RoPE axes.
+    Output shape: [seq_len, axes_count].
+    """
     base = torch.arange(seq_len, device=device, dtype=torch.long)
     cols = []
     stride = 1
@@ -113,6 +143,9 @@ def build_token_ids(seq_len: int, axes_count: int, device: str) -> torch.Tensor:
 
 
 def build_model(config_path: Path, weights_path: Path) -> Flux2Transformer2DModel:
+    """
+    Build Flux2 model from config and load checkpoint weights.
+    """
     config = load_json(config_path)
     model = Flux2Transformer2DModel.from_config(config)
 
@@ -131,6 +164,14 @@ def build_model(config_path: Path, weights_path: Path) -> Flux2Transformer2DMode
 
 
 def main() -> None:
+    """
+    End-to-end validation inference:
+    1) Resolve config + weights
+    2) Load model
+    3) Create synthetic inputs
+    4) Run one no-grad forward pass
+    5) Print shape and parameter summary
+    """
     args = parse_args()
     torch.manual_seed(args.seed)
 
