@@ -40,7 +40,7 @@ def parse_args():
         "--output-dir",
         type=Path,
         required=True,
-        help="Directory where diffusion_pytorch_model.bin and adapter_config.json will be written.",
+        help="Directory where diffusion_pytorch_model.bin and config.json will be written.",
     )
     parser.add_argument(
         "--lora-scale",
@@ -71,6 +71,20 @@ def save_json(path: Path, data):
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
+
+
+def config_to_serializable_dict(config_obj):
+    if isinstance(config_obj, Mapping):
+        return dict(config_obj)
+
+    if hasattr(config_obj, "to_dict"):
+        to_dict = config_obj.to_dict
+        return dict(to_dict() if callable(to_dict) else to_dict)
+
+    if hasattr(config_obj, "__dict__"):
+        return dict(vars(config_obj))
+
+    raise TypeError("Unsupported transformer config object; expected mapping-like or to_dict()-compatible config.")
 
 
 def normalize_target_modules(target_modules):
@@ -171,14 +185,14 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output_weights = args.output_dir / "diffusion_pytorch_model.bin"
-    output_adapter_config = args.output_dir / "adapter_config.json"
+    output_config = args.output_dir / "config.json"
     torch.save(fused_state_dict, output_weights)
-    save_json(output_adapter_config, lora_config.to_dict())
+    save_json(output_config, config_to_serializable_dict(transformer.config))
 
     print(f"Base transformer: {args.dit_pretrained_path}")
     print(f"LoRA checkpoint: {lora_weights_path}")
     print(f"Output checkpoint: {output_weights}")
-    print(f"Output adapter config: {output_adapter_config}")
+    print(f"Output config: {output_config}")
     print(f"Missing keys while loading LoRA: {len(missing_keys)}")
     print(f"Unexpected keys while loading LoRA: {len(unexpected_keys)}")
     print(f"Saved tensors after LoRA-key stripping: {len(fused_state_dict)}")
